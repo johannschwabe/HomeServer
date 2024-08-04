@@ -1,0 +1,110 @@
+
+version: '3'
+
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"   # The HTTP port
+      - "443:443" # The HTTPS port
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock" # So Traefik can listen to the Docker events
+      - "./traefik.yml:/etc/traefik/traefik.yml" # Traefik configuration file
+      - "./acme.json:/acme.json" # Let's Encrypt certificates
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --entryPoints.web.address=:80
+      - --entryPoints.websecure.address=:443
+      - --certificatesResolvers.le.acme.httpChallenge.entryPoint=web
+      - --certificatesResolvers.le.acme.email=johann@schwabe.dev
+      - --certificatesResolvers.le.acme.storage=acme.json
+    networks:
+      - web
+
+  whoami:
+    image: containous/whoami
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`cloud.schwabe.dev`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls.certresolver=le"
+      - "traefik.http.routers.whoami.middlewares=oauth2-proxy"
+      - "traefik.http.services.whoami.loadbalancer.server.port=80"
+
+    networks:
+      - web
+
+
+
+  keycloak:
+    image: quay.io/keycloak/keycloak
+    command: 
+      - start-dev
+      - --proxy=edge
+    environment:
+      KEYCLOAK_ADMIN: Johann
+      KEYCLOAK_ADMIN_PASSWORD: G4xyxHsgWHr%6
+      PROXY_ADDRESS_FORWARDING: "true"
+      KC_DB: postgres
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_URL_HOST: keycloakdb
+      KC_DB_URL_PORT: 5432
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: password
+      KC_LOG_LEVEL: info
+      KC_METRICS_ENABLED: true
+      KC_HEALTH_ENABLED: true
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.keycloak.rule=Host(`auth.schwabe.dev`)
+      - traefik.http.routers.keycloak.entrypoints=websecure
+      - traefik.http.routers.keycloak.tls.certresolver=le
+    depends_on:
+      - keycloakdb
+    networks:
+      - web
+
+  keycloakdb:
+    image: postgres:16
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    networks:
+      - web
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy
+    volumes:
+      - ./proxy.cfg:/proxy.cfg
+    command: --config /proxy.cfg
+    networks:
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.oauth2-proxy.forwardAuth.address=http://oauth2-proxy:4180/oauth2/auth"
+      - "traefik.http.middlewares.oauth2-proxy.forwardAuth.trustForwardHeader=true"
+      - "traefik.http.middlewares.oauth2-proxy.forwardAuth.authResponseHeaders=X-Forwarded-User"
+    ports:
+      - "4180:4180"
+
+networks:
+  web:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: "2001:db8::/64"
+
+volumes:
+  postgres_data:

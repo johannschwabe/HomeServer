@@ -1,0 +1,26 @@
+api:
+  dashboard: true
+log:
+  level: DEBUG
+
+entryPoints:
+  web:
+    address: ":80"
+
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+
+certificatesResolvers:
+  le:
+    acme:
+      email: johann@schwabe.dev
+      storage: acme.json
+#      caServer: "https://acme-staging-v02.api.letsencrypt.org/directory"
+      httpChallenge:
+        entryPoint: web
+
