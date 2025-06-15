@@ -3,7 +3,7 @@ log:
   level: DEBUG
 api:
   dashboard: true
-  insecure: true  # ⚠️ Only for testing; don't expose this in production
+  insecure: false
 entryPoints:
   web:
     address: ":80"
