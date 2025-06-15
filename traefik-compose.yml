@@ -1,0 +1,141 @@
+version: '3.8'
+
+secrets:
+  postgres_password:
+    external: true
+  keycloak_admin_password:
+    external: true
+  oidc_client_secret:
+    external: true
+  auth_secret:
+    external: true
+
+services:
+  reverse-proxy:
+    image: traefik:v3.4
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+    ports:
+      - "80:80"
+      - "443:443" 
+      - "8080:8080"
+      - "5432:5432"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./letsencrypt:/letsencrypt
+    networks:
+      - traefik-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=false"
+  
+  keycloak:
+    image: localhost:5000/custom-keycloak:latest  # Your custom built image
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      PROXY_ADDRESS_FORWARDING: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME: cloak.schwabe.dev
+      KC_FRONTEND_URL: https://cloak.schwabe.dev
+      KC_HTTP_ENABLED: "true"  # Enable HTTP explicitly
+      KC_HTTP_PORT: "8080"
+    secrets:
+      - postgres_password
+      - keycloak_admin_password
+    command: ["start"]
+    networks:
+      - traefik-network
+    depends_on:
+      - postgres
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.keycloak.rule=Host(`cloak.schwabe.dev`)"
+        - "traefik.http.routers.keycloak.entrypoints=websecure"
+        - "traefik.http.routers.keycloak.tls.certresolver=letsencrypt"
+        - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+        
+  traefik-forward-auth:
+    image: localhost:5000/custom-traefik-forward-auth:latest  # Your custom built image
+    environment:
+      PROVIDERS_OIDC_ISSUER_URL: https://cloak.schwabe.dev/realms/master  
+      PROVIDERS_OIDC_CLIENT_ID: main
+      COOKIE_DOMAIN: schwabe.dev
+      LOG_LEVEL: info
+      INSECURE_COOKIE: "false" 
+      DEFAULT_PROVIDER: oidc
+    secrets:
+      - oidc_client_secret
+      - auth_secret
+    networks:
+      - traefik-network
+    deploy:
+      labels:
+        - "traefik.enable=true"
+#        - "traefik.http.routers.auth.rule=Host(`auth.schwabe.dev`)"
+#        - "traefik.http.routers.auth.entrypoints=websecure"  
+#        - "traefik.http.routers.auth.tls.certresolver=letsencrypt"  
+        - "traefik.http.services.auth.loadbalancer.server.port=4181"
+        - "traefik.http.middlewares.auth.forwardauth.address=http://traefik-forward-auth:4181"
+        - "traefik.http.middlewares.auth.forwardauth.authResponseHeaders=X-Forwarded-User"
+        - "traefik.http.middlewares.auth.forwardauth.trustForwardHeader=true"
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - traefik-network
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+
+  private-whoami:
+    image: traefik/whoami:v1.10
+    networks:
+      - traefik-network
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.private-whoami.rule=Host(`private.schwabe.dev`)"
+        - "traefik.http.routers.private-whoami.entrypoints=websecure" 
+        - "traefik.http.routers.private-whoami.tls.certresolver=letsencrypt" 
+        - "traefik.http.routers.private-whoami.middlewares=auth"
+        - "traefik.http.services.private-whoami.loadbalancer.server.port=80"
+        
+  public-whoami:
+    image: traefik/whoami:v1.10
+    networks:
+      - traefik-network
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.public-whoami.rule=Host(`public.schwabe.dev`)"
+        - "traefik.http.routers.public-whoami.entrypoints=websecure"  
+        - "traefik.http.routers.public-whoami.tls.certresolver=letsencrypt"  
+        - "traefik.http.services.public-whoami.loadbalancer.server.port=80"
+        
+networks:
+  traefik-network:
+    driver: overlay
+    attachable: true
+
+volumes:
+  postgres_data:
