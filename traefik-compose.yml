@@ -12,7 +12,7 @@ secrets:
 
 services:
   reverse-proxy:
-    image: traefik:v3.4
+    image: traefik:v3.6
     command:
       - --configFile=/etc/traefik/traefik.yml
     ports:
@@ -70,6 +70,9 @@ services:
     depends_on:
       - postgres
     deploy:
+      placement:
+        constraints:
+          - node.role == manager
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.keycloak.rule=Host(`cloak.schwabe.dev`)"
@@ -83,7 +86,7 @@ services:
       PROVIDERS_OIDC_ISSUER_URL: https://cloak.schwabe.dev/realms/master  
       PROVIDERS_OIDC_CLIENT_ID: main
       COOKIE_DOMAIN: schwabe.dev
-      LOG_LEVEL: info
+      LOG_LEVEL: debug
       INSECURE_COOKIE: "false" 
       DEFAULT_PROVIDER: oidc
     secrets:
